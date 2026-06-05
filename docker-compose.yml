@@ -1,0 +1,110 @@
+services:
+  # Database Service
+  postgres:
+    image: postgres:16-alpine
+    container_name: clinicallymanic_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_DB: ${DB_NAME:-clinicallymanic_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Redis Service
+  redis:
+    image: redis:7-alpine
+    container_name: clinicallymanic_redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_pass} --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_pass}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend Service
+  backend:
+    build:
+      context: ./clinicallymanic-with-prisma
+      dockerfile: Dockerfile
+    container_name: clinicallymanic_backend
+    restart: unless-stopped
+    env_file:
+      - ./clinicallymanic-with-prisma/.env
+    environment:
+      NODE_ENV: production
+      PORT: 8000
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-password}@postgres:5432/${DB_NAME:-clinicallymanic_db}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app_network
+
+  # Frontend Service
+  frontend:
+    build:
+      context: ./clinicallymanic-frontend
+      dockerfile: Dockerfile
+    container_name: clinicallymanic_frontend
+    restart: unless-stopped
+    env_file:
+      - ./clinicallymanic-frontend/.env
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: http://backend:8000/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - app_network
+
+  # Admin Service
+  admin:
+    build:
+      context: ./clinicallymanic-admin-dashboard
+      dockerfile: Dockerfile
+    container_name: clinicallymanic_admin
+    restart: unless-stopped
+    env_file:
+      - ./clinicallymanic-admin-dashboard/.env
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: http://backend:8000/api/v1
+    ports:
+      - "3001:3000"
+    depends_on:
+      - backend
+    networks:
+      - app_network
+
+# Volumes
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# Networks
+networks:
+  app_network:
+    driver: bridge
